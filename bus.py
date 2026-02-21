@@ -2,11 +2,13 @@
 """
 OpenClaw Bus - 跨实例实时通讯
 双通道：Redis + Telegram Group
+
+自动从 OpenClaw 配置文件读取 Telegram Bot Token
 """
 import redis
+import requests
 import json
 import os
-import subprocess
 import time
 from datetime import datetime
 
@@ -14,8 +16,11 @@ from datetime import datetime
 REDIS_URL = os.environ.get('UPSTASH_REDIS_URL', '')
 GROUP_ID = os.environ.get('TELEGRAM_GROUP_ID', '-4882522885')
 
-# Redis 连接
+# OpenClaw 配置文件路径
+OPENCLAW_CONFIG = os.path.expanduser('~/.openclaw/openclaw.json')
+
 def get_redis():
+    """获取 Redis 连接"""
     if REDIS_URL:
         return redis.from_url(REDIS_URL, decode_responses=True)
     # 尝试从配置文件读取
@@ -26,6 +31,27 @@ def get_redis():
             return redis.from_url(config.get('redis_url', ''), decode_responses=True)
     return None
 
+def get_telegram_token():
+    """从 OpenClaw 配置文件读取 Telegram Bot Token"""
+    if os.path.exists(OPENCLAW_CONFIG):
+        with open(OPENCLAW_CONFIG, 'r') as f:
+            config = json.load(f)
+            return config.get('channels', {}).get('telegram', {}).get('botToken', '')
+    return ''
+
+def get_group_id():
+    """获取 Telegram Group ID"""
+    if GROUP_ID and GROUP_ID != '-4882522885':
+        return GROUP_ID
+    # 尝试从配置文件读取
+    config_file = os.path.expanduser('~/.openclaw-bus-config.json')
+    if os.path.exists(config_file):
+        with open(config_file, 'r') as f:
+            config = json.load(f)
+            return config.get('telegram_group_id', GROUP_ID)
+    return GROUP_ID
+
+# Redis 连接
 r = get_redis()
 
 def send(agent: str, text: str):
@@ -46,24 +72,30 @@ def send(agent: str, text: str):
         except Exception as e:
             print(f"Redis error: {e}")
     
-    # 2. 发送到 Telegram Group（使用 OpenClaw message 工具）
+    # 2. 发送到 Telegram Group（使用配置文件中的 Token）
     telegram_ok = False
-    try:
-        emoji = {"elon": "🦞", "buffett": "💰", "musk": "🚀"}.get(agent.lower(), "🤖")
-        # 使用 OpenClaw 的 message 工具
-        result = subprocess.run(
-            ['python3', '-c', f'''
-import json
-# OpenClaw message 工具调用
-# 这里假设 OpenClaw 有一个命令行方式发送消息
-# 实际应该用 OpenClaw 的内部 API
-print("Message sent to Telegram")
-'''],
-            capture_output=True, text=True, timeout=10
-        )
-        telegram_ok = result.returncode == 0
-    except Exception as e:
-        print(f"Telegram error: {e}")
+    token = get_telegram_token()
+    group_id = get_group_id()
+    
+    if token and group_id:
+        try:
+            emoji = {"elon": "🦞", "buffett": "💰", "musk": "🚀"}.get(agent.lower(), "🤖")
+            resp = requests.post(
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                json={
+                    "chat_id": group_id,
+                    "text": f"{emoji} **{agent}**: {text}",
+                    "parse_mode": "Markdown"
+                },
+                timeout=10
+            )
+            telegram_ok = resp.status_code == 200
+            if not telegram_ok:
+                print(f"Telegram error: {resp.status_code} {resp.text}")
+        except Exception as e:
+            print(f"Telegram error: {e}")
+    else:
+        print(f"Telegram skipped: token={bool(token)}, group_id={group_id}")
     
     return {"redis": redis_ok, "telegram": telegram_ok}
 
@@ -80,11 +112,22 @@ def get_recent(count: int = 50):
 # 测试
 if __name__ == '__main__':
     import sys
+    
+    # 显示配置信息
+    print("📋 配置信息:")
+    print(f"  Telegram Token: {'✅ 已配置' if get_telegram_token() else '❌ 未配置'}")
+    print(f"  Group ID: {get_group_id()}")
+    print(f"  Redis: {'✅ 已连接' if r else '❌ 未连接'}")
+    print()
+    
     if len(sys.argv) >= 3:
         agent = sys.argv[1]
         text = ' '.join(sys.argv[2:])
         result = send(agent, text)
         print(json.dumps(result))
+    elif len(sys.argv) == 2 and sys.argv[1] == 'config':
+        # 只显示配置
+        pass
     else:
         print("Usage: python3 bus.py <agent> <message>")
-        print("\n注意：发送到 Telegram 需要使用 OpenClaw 的 message 工具")
+        print("       python3 bus.py config  # 显示配置信息")
