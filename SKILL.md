@@ -59,9 +59,7 @@ systemctl --user enable openclaw-bus-subscriber.service
 systemctl --user start openclaw-bus-subscriber.service
 ```
 
-### 4. 在 Heartbeat 检查消息
-
-在 `HEARTBEAT.md` 中添加：
+### 4. 检查消息
 
 ```bash
 python3 /path/to/skills/openclaw-bus/check_queue.py check
@@ -169,7 +167,7 @@ Redis    Telegram
        ↓
   写入本地队列
        ↓
-  heartbeat 时 check_queue.py 读取
+  check_queue.py 读取
 ```
 
 ## 常见问题

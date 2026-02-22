@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 OpenClaw Bus - 检查消息队列
-在 heartbeat 时调用，检查是否有新消息
+，检查是否有新消息
 """
 import json
 import os
@@ -114,7 +114,7 @@ if __name__ == '__main__':
             print("  python3 check_queue.py clear  - 清空队列")
             print("  python3 check_queue.py status - 显示状态")
     else:
-        # 默认：返回是否有新消息（用于 heartbeat）
+        # 默认：返回是否有新消息（）
         if has_new_messages():
             msgs = get_new_messages()
             for msg in msgs:

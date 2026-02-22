@@ -13,7 +13,6 @@ from datetime import datetime
 # 配置
 REDIS_URL = os.environ.get('UPSTASH_REDIS_URL', '')
 QUEUE_FILE = '/tmp/openclaw-bus-queue.jsonl'
-HEARTBEAT_FILE = '/tmp/openclaw-bus-heartbeat.json'
 
 def get_redis():
     """获取 Redis 连接"""
@@ -40,14 +39,6 @@ def save_to_queue(msg):
     except Exception as e:
         print(f"保存消息失败: {e}")
 
-def update_heartbeat():
-    """更新心跳时间"""
-    try:
-        with open(HEARTBEAT_FILE, 'w') as f:
-            json.dump({"last_heartbeat": time.time(), "time": datetime.now().isoformat()}, f)
-    except:
-        pass
-
 def message_handler(msg):
     """处理收到的消息"""
     if msg['type'] == 'message':
@@ -72,10 +63,8 @@ def subscribe_loop():
         try:
             pubsub = r.pubsub()
             pubsub.subscribe('openclaw-chat')
-            update_heartbeat()
             
             for msg in pubsub.listen():
-                update_heartbeat()
                 message_handler(msg)
                 
         except redis.ConnectionError:
