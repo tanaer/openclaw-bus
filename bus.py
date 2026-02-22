@@ -80,12 +80,12 @@ def send(agent: str, text: str):
     if token and group_id:
         try:
             emoji = {"elon": "🦞", "buffett": "💰", "musk": "🚀"}.get(agent.lower(), "🤖")
+            # 不使用 Markdown，避免特殊字符解析问题
             resp = requests.post(
                 f"https://api.telegram.org/bot{token}/sendMessage",
                 json={
                     "chat_id": group_id,
-                    "text": f"{emoji} **{agent}**: {text}",
-                    "parse_mode": "Markdown"
+                    "text": f"{emoji} {agent}: {text}"
                 },
                 timeout=10
             )
