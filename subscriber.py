@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """
 OpenClaw Bus - 消息订阅者
-后台持续订阅 Redis 频道，收到消息后写入本地队列文件
+后台持续订阅 Redis 频道，收到消息后：
+1. 保存到本地队列
+2. 发送系统事件到主会话（触发自动处理）
 """
 import redis
 import json
@@ -9,6 +11,7 @@ import os
 import time
 import threading
 from datetime import datetime
+import requests
 
 
 def load_env():
@@ -27,11 +30,15 @@ load_env()
 # 配置
 REDIS_URL = os.environ.get('UPSTASH_REDIS_URL', '')
 QUEUE_FILE = '/tmp/openclaw-bus-queue.jsonl'
+LAST_MSG_FILE = '/tmp/openclaw-bus-lastmsg.json'
+
+# 本地 Agent 配置（从 OpenClaw 配置读取）
+OPENCLAW_CONFIG = os.path.expanduser('~/.openclaw/openclaw.json')
+LOCAL_AGENT_NAME = os.environ.get('LOCAL_AGENT_NAME', 'elon')  # 当前 Agent 名字
 
 def get_redis():
     """获取 Redis 连接"""
     if not REDIS_URL:
-        # 尝试从配置文件读取
         config_file = os.path.expanduser('~/.openclaw-bus-config.json')
         if os.path.exists(config_file):
             with open(config_file, 'r') as f:
@@ -39,6 +46,17 @@ def get_redis():
                 return redis.from_url(config.get('redis_url', ''), decode_responses=True)
         return None
     return redis.from_url(REDIS_URL, decode_responses=True)
+
+def get_openclaw_api():
+    """获取 OpenClaw API 配置"""
+    if os.path.exists(OPENCLAW_CONFIG):
+        with open(OPENCLAW_CONFIG, 'r') as f:
+            config = json.load(f)
+            return {
+                'url': config.get('gateway', {}).get('url', 'http://127.0.0.1:18789'),
+                'token': config.get('gateway', {}).get('token', '')
+            }
+    return {'url': 'http://127.0.0.1:18789', 'token': ''}
 
 def save_to_queue(msg):
     """保存消息到本地队列文件"""
@@ -53,13 +71,91 @@ def save_to_queue(msg):
     except Exception as e:
         print(f"保存消息失败: {e}")
 
+def save_last_msg(msg):
+    """保存最后收到的消息"""
+    try:
+        with open(LAST_MSG_FILE, 'w') as f:
+            json.dump(msg, f)
+    except Exception as e:
+        print(f"保存最后消息失败: {e}")
+
+def notify_openclaw(msg):
+    """通知 OpenClaw 主会话处理新消息"""
+    try:
+        api = get_openclaw_api()
+        # 发送系统事件到主会话
+        payload = {
+            "type": "openclaw-bus-message",
+            "from": msg.get('from'),
+            "to": msg.get('to'),
+            "text": msg.get('text'),
+            "time": msg.get('time')
+        }
+        
+        # 调用 OpenClaw API 发送系统消息
+        resp = requests.post(
+            f"{api['url']}/api/sessions/main/inject",
+            json={"type": "systemEvent", "text": f"📬 收到新消息 from {msg.get('from')}: {msg.get('text')[:100]}..."},
+            headers={"Authorization": f"Bearer {api['token']}"},
+            timeout=5
+        )
+        if resp.status_code == 200:
+            print(f"✅ 已通知 OpenClaw 处理消息")
+        else:
+            print(f"⚠️ 通知失败: {resp.status_code}")
+    except Exception as e:
+        print(f"通知 OpenClaw 失败: {e}")
+
+def auto_reply(msg):
+    """自动回复消息"""
+    from_agent = msg.get('from', '').lower()
+    text = msg.get('text', '').lower()
+    to = msg.get('to', '').lower() if msg.get('to') else None
+    
+    # 只回复发给自己的消息
+    if to and to != LOCAL_AGENT_NAME:
+        return
+    
+    # Ping-Pong 自动回复
+    if 'ping' in text and 'pong' not in text:
+        time.sleep(0.5)  # 稍微延迟，避免太快
+        reply = f"pong 🏓 收到来自 {from_agent} 的 ping！"
+        send_reply(from_agent, reply)
+        print(f"🤖 自动回复: {reply}")
+    
+    # 帮助命令
+    elif 'help' in text or '帮助' in text:
+        reply = f"我是 {LOCAL_AGENT_NAME} 的自动回复机器人。发送 'ping' 测试连接。"
+        send_reply(from_agent, reply)
+
+def send_reply(to_agent, text):
+    """发送回复消息"""
+    try:
+        # 使用 bus.py 发送回复
+        os.system(f'cd {os.path.dirname(__file__)} && python3 bus.py {to_agent} "{text}" > /dev/null 2>&1')
+    except Exception as e:
+        print(f"发送回复失败: {e}")
+
 def message_handler(msg):
     """处理收到的消息"""
     if msg['type'] == 'message':
         try:
             data = json.loads(msg['data'])
-            print(f"[{data.get('from', 'unknown')}] {data.get('text', '')}")
+            sender = data.get('from', 'unknown')
+            content = data.get('text', '')
+            
+            print(f"[{sender}] {content[:50]}...")
+            
+            # 保存到队列
             save_to_queue(data)
+            save_last_msg(data)
+            
+            # 通知 OpenClaw 主会话
+            notify_openclaw(data)
+            
+            # 自动回复
+            auto_reply(data)
+            
         except Exception as e:
             print(f"处理消息失败: {e}")
 
@@ -70,8 +166,9 @@ def subscribe_loop():
         print("❌ Redis 连接失败，请检查配置")
         return
     
-    print("🚌 OpenClaw Bus 订阅者启动")
+    print(f"🚌 OpenClaw Bus 订阅者启动")
     print(f"📡 订阅频道: openclaw-chat")
+    print(f"🤖 本地 Agent: {LOCAL_AGENT_NAME}")
     
     while True:
         try:
