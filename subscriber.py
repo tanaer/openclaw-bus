@@ -10,6 +10,20 @@ import time
 import threading
 from datetime import datetime
 
+
+def load_env():
+    """从 .env 文件加载配置"""
+    env_path = os.path.join(os.path.dirname(__file__), '.env')
+    if os.path.exists(env_path):
+        with open(env_path) as f:
+            for line in f:
+                line = line.strip()
+                if '=' in line and not line.startswith('#'):
+                    key, value = line.split('=', 1)
+                    os.environ[key] = value
+
+load_env()
+
 # 配置
 REDIS_URL = os.environ.get('UPSTASH_REDIS_URL', '')
 QUEUE_FILE = '/tmp/openclaw-bus-queue.jsonl'
